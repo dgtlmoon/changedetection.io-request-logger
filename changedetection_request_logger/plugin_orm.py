@@ -262,7 +262,8 @@ class MySQLLoggerWrapper:
 
             # Store the insert ID for later use (e.g., updating status in finalize hook)
             self.last_logging_insert_id = request.id
-            logger.debug(f"Logged watch {self.watch.get('uuid')} with request ID {request.id}")
+            db_type = session.bind.dialect.name.upper()
+            logger.info(f"[{self.watch.get('uuid')}] Logged watch page request to {db_type} database (ID: {request.id})")
 
         except Exception as e:
             logger.critical(f"SQLAlchemy logging failed for watch {self.watch.get('uuid')}: {e}")

@@ -73,7 +73,7 @@ class Watch(Base):
 
     id = Column(Integer, primary_key=True)
     watch_uuid = Column(String(36), nullable=False, index=True, comment='Watch UUID (not unique - can have multiple URLs)')
-    watch_url = Column(String(2048), nullable=False, index=True, comment='URL at time of request')
+    watch_url = Column(String(2048), nullable=False, comment='URL at time of request (no index - use url_hash for queries)')
     url_hash = Column(String(32), nullable=False, unique=True, index=True, comment='MD5(watch_uuid + watch_url) - ensures uniqueness')
     processor = Column(String(64))
     first_seen = Column(DateTime, default=datetime.utcnow)
