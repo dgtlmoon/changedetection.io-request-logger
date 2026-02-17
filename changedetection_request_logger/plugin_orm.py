@@ -29,6 +29,7 @@ from .models import (
 # Global session factory (initialized on first use)
 _session_factory = None
 _engine = None
+_config_error_logged = False
 
 
 def get_database_url():
@@ -39,10 +40,15 @@ def get_database_url():
     Returns:
         str: SQLAlchemy database URL or None if not configured
     """
+    global _config_error_logged
+
     db_type = os.getenv('LOGGER_DB_TYPE', 'mysql').lower()
     password = os.getenv('LOGGER_MYSQL_PASSWORD') or os.getenv('LOGGER_POSTGRES_PASSWORD')
 
     if not password and db_type != 'sqlite':
+        if not _config_error_logged:
+            logger.error(f"Request logger plugin is not configured - missing password for LOGGER_DB_TYPE='{db_type}'. Set LOGGER_MYSQL_PASSWORD or LOGGER_POSTGRES_PASSWORD, or use LOGGER_DB_TYPE=sqlite")
+            _config_error_logged = True
         return None
 
     if db_type == 'mysql':
@@ -64,7 +70,9 @@ def get_database_url():
         return f"sqlite:///{db_path}"
 
     else:
-        logger.critical(f"Unsupported LOGGER_DB_TYPE: {db_type}")
+        if not _config_error_logged:
+            logger.critical(f"Unsupported LOGGER_DB_TYPE: {db_type}")
+            _config_error_logged = True
         return None
 
 
@@ -144,7 +152,7 @@ class MySQLLoggerWrapper:
         self.wrapped_handler = wrapped_handler
         self.watch = watch
         self.datastore = datastore
-        self.hostname = os.getenv('HOSTNAME', 'unknown')
+        self.hostname = os.getenv('HOSTNAME') or 'unknown'
         self.app_guid = datastore.data['settings']['application'].get('shared_diff_access_password', 'default-guid')
 
         # Metrics to capture
@@ -218,10 +226,12 @@ class MySQLLoggerWrapper:
 
             # Get or create lookup entries
             hostname_obj = get_or_create_hostname(session, self.hostname)
+            # Use watch.link for canonical URL (handles redirects, etc)
+            watch_url = getattr(self.watch, 'link', None) or self.watch.get('url')
             watch_obj = get_or_create_watch(
                 session,
                 self.watch.get('uuid'),
-                self.watch.get('url'),
+                watch_url,
                 self.watch.get('processor', 'text_json_diff')
             )
             proxy_obj = get_or_create_proxy(session, proxy_key, proxy_endpoint) if proxy_endpoint else None

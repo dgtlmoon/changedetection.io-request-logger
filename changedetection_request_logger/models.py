@@ -5,12 +5,13 @@ Supports MySQL, PostgreSQL, SQLite via SQLAlchemy.
 Schema migrations managed by Alembic.
 """
 from sqlalchemy import (
-    Column, Integer, BigInteger, SmallInteger, String, Text, DateTime,
-    Date, ForeignKey, Index, LargeBinary, TIMESTAMP, func
+    Column, Integer, BigInteger, String, Text, DateTime,
+    Date, ForeignKey, Index, LargeBinary
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 from datetime import datetime
+import hashlib
 
 Base = declarative_base()
 
@@ -19,10 +20,10 @@ class Hostname(Base):
     """Lookup table for server hostnames (typically 1-10 unique values)"""
     __tablename__ = 'hostnames'
 
-    id = Column(SmallInteger, primary_key=True, autoincrement=True)
-    hostname = Column(String(255), nullable=False, unique=True, index=True)
-    first_seen = Column(TIMESTAMP, default=func.now())
-    last_seen = Column(TIMESTAMP, default=func.now(), onupdate=func.now())
+    id = Column(Integer, primary_key=True)
+    hostname = Column(String(255), nullable=True, unique=True, index=True)
+    first_seen = Column(DateTime, default=datetime.utcnow)
+    last_seen = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # Relationships
     requests = relationship('WatchRequest', back_populates='hostname_obj')
@@ -32,11 +33,11 @@ class ProxyEndpoint(Base):
     """Lookup table for proxy configurations (typically 5-50 unique values)"""
     __tablename__ = 'proxy_endpoints'
 
-    id = Column(SmallInteger, primary_key=True, autoincrement=True)
+    id = Column(Integer, primary_key=True)
     proxy_key = Column(String(128), index=True, comment='Proxy name/region (e.g., europe-frankfurt)')
     proxy_endpoint = Column(String(512), nullable=False, comment='Proxy URL (e.g., socks5://10.9.0.12:1080)')
-    first_seen = Column(TIMESTAMP, default=func.now())
-    last_seen = Column(TIMESTAMP, default=func.now(), onupdate=func.now())
+    first_seen = Column(DateTime, default=datetime.utcnow)
+    last_seen = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     request_count = Column(Integer, default=0, comment='Total requests using this proxy')
 
     # Relationships
@@ -51,11 +52,11 @@ class BrowserConnection(Base):
     """Lookup table for browser connection endpoints (typically 1-20 unique values)"""
     __tablename__ = 'browser_connections'
 
-    id = Column(SmallInteger, primary_key=True, autoincrement=True)
+    id = Column(Integer, primary_key=True)
     browser_connection_url = Column(String(512), nullable=False, comment='CDP/WS endpoint or Selenium hub')
     fetch_backend = Column(String(64), nullable=False, index=True, comment='html_webdriver, html_playwright, etc')
-    first_seen = Column(TIMESTAMP, default=func.now())
-    last_seen = Column(TIMESTAMP, default=func.now(), onupdate=func.now())
+    first_seen = Column(DateTime, default=datetime.utcnow)
+    last_seen = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     request_count = Column(Integer, default=0, comment='Total requests using this connection')
 
     # Relationships
@@ -67,16 +68,17 @@ class BrowserConnection(Base):
 
 
 class Watch(Base):
-    """Lookup table for watches (hundreds to thousands of unique values)"""
+    """Lookup table for watches - tracks URL changes via hash of (uuid + url)"""
     __tablename__ = 'watches'
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    watch_uuid = Column(String(36), nullable=False, unique=True, index=True)
-    watch_url = Column(String(2048), nullable=False, index=True)
+    id = Column(Integer, primary_key=True)
+    watch_uuid = Column(String(36), nullable=False, index=True, comment='Watch UUID (not unique - can have multiple URLs)')
+    watch_url = Column(String(2048), nullable=False, index=True, comment='URL at time of request')
+    url_hash = Column(String(32), nullable=False, unique=True, index=True, comment='MD5(watch_uuid + watch_url) - ensures uniqueness')
     processor = Column(String(64))
-    first_seen = Column(TIMESTAMP, default=func.now())
-    last_seen = Column(TIMESTAMP, default=func.now(), onupdate=func.now())
-    request_count = Column(Integer, default=0, comment='Total requests for this watch')
+    first_seen = Column(DateTime, default=datetime.utcnow)
+    last_seen = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    request_count = Column(Integer, default=0, comment='Total requests for this watch+URL combination')
 
     # Relationships
     requests = relationship('WatchRequest', back_populates='watch_obj')
@@ -86,10 +88,10 @@ class ErrorType(Base):
     """Lookup table for error types (typically 20-50 unique values)"""
     __tablename__ = 'error_types'
 
-    id = Column(SmallInteger, primary_key=True, autoincrement=True)
+    id = Column(Integer, primary_key=True)
     error_type = Column(String(128), nullable=False, unique=True, index=True)
-    first_seen = Column(TIMESTAMP, default=func.now())
-    last_seen = Column(TIMESTAMP, default=func.now(), onupdate=func.now())
+    first_seen = Column(DateTime, default=datetime.utcnow)
+    last_seen = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     occurrence_count = Column(Integer, default=0, comment='Total occurrences of this error')
 
     # Relationships
@@ -101,25 +103,25 @@ class WatchRequest(Base):
     __tablename__ = 'watch_requests'
 
     # Primary key
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    id = Column(Integer, primary_key=True)
 
     # Core identifiers (foreign keys)
     app_guid = Column(String(64), nullable=False, index=True, comment='Application instance GUID')
-    hostname_id = Column(SmallInteger, ForeignKey('hostnames.id'), nullable=False, index=True)
+    hostname_id = Column(Integer, ForeignKey('hostnames.id'), nullable=False, index=True)
     watch_id = Column(Integer, ForeignKey('watches.id'), nullable=False, index=True)
 
     # Temporal data (for partitioning in MySQL)
     request_date = Column(Date, nullable=False, index=True, comment='Request date for partitioning')
-    request_timestamp = Column(DateTime(timezone=False, fsp=3), nullable=False, index=True,
+    request_timestamp = Column(DateTime(timezone=False), nullable=False, index=True,
                                comment='Precise timestamp with milliseconds')
 
     # Network identifiers (foreign keys)
-    proxy_id = Column(SmallInteger, ForeignKey('proxy_endpoints.id'), index=True)
-    browser_conn_id = Column(SmallInteger, ForeignKey('browser_connections.id'), index=True)
+    proxy_id = Column(Integer, ForeignKey('proxy_endpoints.id'), index=True)
+    browser_conn_id = Column(Integer, ForeignKey('browser_connections.id'), index=True)
 
     # Browser steps (variable, not normalized)
     browser_steps = Column(LargeBinary, comment='Brotli-compressed base64 browser steps JSON')
-    browser_steps_count = Column(SmallInteger, default=0)
+    browser_steps_count = Column(Integer, default=0)
 
     # Status tracking
     result = Column(String(255), index=True, comment='success, failed, timeout, etc')
@@ -127,10 +129,10 @@ class WatchRequest(Base):
     # Performance metrics
     duration_ms = Column(Integer)
     content_length = Column(Integer)
-    status_code = Column(SmallInteger)
+    status_code = Column(Integer)
 
     # Error tracking
-    error_type_id = Column(SmallInteger, ForeignKey('error_types.id'), index=True)
+    error_type_id = Column(Integer, ForeignKey('error_types.id'), index=True)
     error_message = Column(Text, comment='Error details (variable, not normalized)')
 
     # Relationships
@@ -241,7 +243,9 @@ def get_or_create_browser_conn(session, browser_url, fetch_backend):
 
 
 def get_or_create_watch(session, watch_uuid, watch_url, processor):
-    """Get or create watch entry.
+    """Get or create watch entry based on hash of (uuid + url).
+
+    When a watch changes URL, a new record is created - preserving history.
 
     Args:
         session: SQLAlchemy session
@@ -252,20 +256,26 @@ def get_or_create_watch(session, watch_uuid, watch_url, processor):
     Returns:
         Watch object
     """
-    obj = session.query(Watch).filter_by(watch_uuid=watch_uuid).first()
+    # Calculate MD5 hash of (watch_uuid + watch_url) for uniqueness
+    url_hash = hashlib.md5(f"{watch_uuid}{watch_url}".encode('utf-8')).hexdigest()
+
+    # Query by hash - if URL changes, this will not find existing record
+    obj = session.query(Watch).filter_by(url_hash=url_hash).first()
 
     if not obj:
+        # New watch or URL changed - create new record
         obj = Watch(
             watch_uuid=watch_uuid,
             watch_url=watch_url,
+            url_hash=url_hash,
             processor=processor,
             request_count=1
         )
         session.add(obj)
         session.flush()
     else:
+        # Same watch+URL - update existing record
         obj.last_seen = datetime.now()
-        obj.watch_url = watch_url  # Update URL in case it changed
         obj.processor = processor
         obj.request_count += 1
 
